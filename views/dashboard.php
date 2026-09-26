@@ -41,24 +41,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $stmt->execute([$_POST['order_id']]);
         $pdo->prepare("UPDATE tickets SET status='REJECTED' WHERE order_id=?")->execute([$_POST['order_id']]);
     }
-
-    if ($action === 'set_active_gateway') {
-        $pdo->query("UPDATE gateways SET is_active=0");
-        $stmt = $pdo->prepare("UPDATE gateways SET is_active=1 WHERE id=?");
-        $stmt->execute([$_POST['gateway_id']]);
-        $stmt = $pdo->prepare("UPDATE settings SET active_gateway_id=? WHERE id=1");
-        $stmt->execute([$_POST['gateway_id']]);
-    }
     
     if ($action === 'manual_verify_gateway') {
-        $stmt = $pdo->prepare("UPDATE gateways SET mid=?, upi_id=?, api_token=?, session_cookie=? WHERE id=?");
+        // Update credentials and activate
+        $stmt = $pdo->prepare("UPDATE gateways SET mid=?, upi_id=?, api_token=?, session_cookie=?, is_active=1 WHERE id=?");
         $stmt->execute([
             $_POST['mid'] ?? null,
             $_POST['upi_id'] ?? null,
-            $_POST['api_token'] ?? null,
-            $_POST['session_cookie'] ?? null,
+            $_POST['payee_name'] ?? null,
+            $_POST['cashier_id'] ?? null,
             $_POST['gateway_id']
         ]);
+        // Deactivate others
+        $pdo->prepare("UPDATE gateways SET is_active=0 WHERE id != ?")->execute([$_POST['gateway_id']]);
+        // Set global active
+        $pdo->prepare("UPDATE settings SET active_gateway_id=? WHERE id=1")->execute([$_POST['gateway_id']]);
     }
 
     if ($action === 'add_webhook') {
@@ -115,6 +112,10 @@ $stmt->execute($params);
 $transactions = $stmt->fetchAll();
 
 $gateways = $pdo->query("SELECT * FROM gateways")->fetchAll();
+$gateways_map = [];
+foreach($gateways as $g) {
+    $gateways_map[$g['name']] = $g;
+}
 $tickets = $pdo->query("SELECT * FROM tickets ORDER BY created_at DESC")->fetchAll();
 $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
 
@@ -127,8 +128,16 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
     <title>My UPI Gateway - Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <style>
+        .provider-card.active {
+            border-color: #8B5CF6; /* Purple/Blue Glowing */
+            box-shadow: 0 0 15px rgba(139, 92, 246, 0.4);
+            background-color: rgba(30, 41, 59, 0.8);
+        }
+    </style>
 </head>
-<body class="bg-[#0B0F19] text-gray-300 font-sans min-h-screen" x-data="{ tab: 'dashboard', modalOpen: false, currentGateway: null }">
+<body class="bg-[#0B0F19] text-gray-300 font-sans min-h-screen" x-data="{ tab: 'dashboard' }">
 
     <!-- Navbar (No Logout) -->
     <nav class="bg-[#111827] border-b border-[#1E293B] sticky top-0 z-50">
@@ -136,7 +145,7 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
             <div class="font-bold text-xl text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-indigo-400 to-purple-500">
                 <?= htmlspecialchars($settings['merchant_name']) ?>
             </div>
-            <div class="flex space-x-6 font-medium text-sm overflow-x-auto">
+            <div class="flex space-x-6 font-medium text-sm overflow-x-auto hide-scrollbar">
                 <button @click="tab = 'dashboard'" :class="tab == 'dashboard' ? 'text-blue-400' : 'hover:text-white'">Dashboard</button>
                 <button @click="tab = 'gateways'" :class="tab == 'gateways' ? 'text-blue-400' : 'hover:text-white'">My Gateways</button>
                 <button @click="tab = 'ledger'" :class="tab == 'ledger' ? 'text-blue-400' : 'hover:text-white'">Ledger Entries</button>
@@ -150,6 +159,7 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
         
         <!-- DASHBOARD TAB -->
         <div x-show="tab === 'dashboard'">
+            <!-- Stats -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
                 <div class="bg-[#111827] p-6 rounded-xl border border-[#1E293B] shadow-sm">
                     <div class="text-sm text-gray-500">Today's Collection</div>
@@ -209,17 +219,17 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
                         </div>
 
                         <div class="flex items-center justify-between p-3 bg-[#0B0F19] rounded-lg border border-[#1E293B]">
-                            <span class="text-sm">Show QR Code</span>
+                            <span class="text-sm text-white">Show QR Code</span>
                             <input type="checkbox" name="show_qr" <?= $settings['show_qr'] ? 'checked' : '' ?> class="w-5 h-5 accent-blue-600">
                         </div>
 
                         <div class="flex items-center justify-between p-3 bg-[#0B0F19] rounded-lg border border-[#1E293B]">
-                            <span class="text-sm">Show Intent Deep-Links</span>
+                            <span class="text-sm text-white">Show Intent Buttons (PhonePe, Paytm, GPay)</span>
                             <input type="checkbox" name="show_intent_buttons" <?= $settings['show_intent_buttons'] ? 'checked' : '' ?> class="w-5 h-5 accent-blue-600">
                         </div>
 
                         <div class="flex items-center justify-between p-3 bg-[#0B0F19] rounded-lg border border-[#1E293B]">
-                            <span class="text-sm">Show "Powered By" Footer</span>
+                            <span class="text-sm text-white">Show "Powered By" Footer</span>
                             <input type="checkbox" name="show_powered_by" <?= $settings['show_powered_by'] ? 'checked' : '' ?> class="w-5 h-5 accent-blue-600">
                         </div>
 
@@ -229,37 +239,148 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
             </div>
         </div>
 
-        <!-- GATEWAYS TAB (10-in-1) -->
-        <div x-show="tab === 'gateways'" x-cloak>
-            <h2 class="text-2xl font-bold text-white mb-6">10-in-1 Connect Merchant & Verification System</h2>
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                <?php foreach($gateways as $g): ?>
-                <div class="bg-[#111827] p-6 rounded-xl border <?= $g['is_active'] ? 'border-blue-500 shadow-[0_0_15px_rgba(37,99,235,0.2)]' : 'border-[#1E293B]' ?> flex flex-col">
-                    <div class="flex justify-between items-start mb-4">
-                        <h3 class="font-bold text-lg text-white"><?= htmlspecialchars($g['name']) ?></h3>
-                        <?php if($g['is_active']): ?>
-                            <span class="bg-blue-600 text-white text-xs px-2 py-1 rounded shadow">DEFAULT ACTIVE</span>
-                        <?php endif; ?>
+        <!-- GATEWAYS TAB (StreamTipz Style) -->
+        <div x-show="tab === 'gateways'" x-cloak x-data="gatewayManager()">
+            <h2 class="text-2xl font-bold text-white mb-6">10-in-1 Provider Selection</h2>
+            
+            <!-- Horizontal Provider Selector Cards -->
+            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+                <template x-for="provider in providers" :key="provider.name">
+                    <div @click="selectProvider(provider)" 
+                         class="provider-card relative bg-[#111827] border border-[#1E293B] rounded-xl p-4 cursor-pointer hover:bg-[#1E293B]/50 transition text-center flex flex-col items-center justify-center min-h-[120px]"
+                         :class="{ 'active': activeProvider === provider.name }">
+                        <div x-show="activeProvider === provider.name" class="absolute -top-2 -right-2 bg-green-500 text-white rounded-full p-1 shadow-lg shadow-green-500/50">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="3" d="M5 13l4 4L19 7"></path></svg>
+                        </div>
+                        <div class="font-bold text-sm text-white leading-tight" x-text="provider.name"></div>
+                        <div class="text-[10px] text-gray-500 mt-2 uppercase tracking-wide" x-text="provider.badge"></div>
+                        <div x-show="provider.isActive" class="mt-2 text-[10px] bg-blue-500/20 text-blue-400 px-2 py-0.5 rounded-full font-bold">LIVE</div>
                     </div>
-                    
-                    <div class="text-sm text-gray-400 mb-2">VPA: <span class="text-gray-200"><?= htmlspecialchars($g['upi_id'] ?? 'Not set') ?></span></div>
-                    <div class="text-sm text-gray-400 mb-6">MID: <span class="text-gray-200"><?= htmlspecialchars($g['mid'] ?? 'Not set') ?></span></div>
-                    
-                    <div class="mt-auto space-y-2">
-                        <button @click="modalOpen = true; currentGateway = <?= htmlspecialchars(json_encode($g)) ?>;" class="w-full bg-[#1E293B] hover:bg-gray-700 text-white py-2 rounded-lg transition text-sm font-medium border border-gray-600">
-                            Connect / Manual Verify
-                        </button>
-                        
-                        <?php if(!$g['is_active'] && !empty($g['upi_id'])): ?>
-                        <form method="POST">
-                            <input type="hidden" name="action" value="set_active_gateway">
-                            <input type="hidden" name="gateway_id" value="<?= $g['id'] ?>">
-                            <button class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg transition text-sm font-medium">Set as Default Active</button>
+                </template>
+            </div>
+
+            <!-- Provider Setup Form Area -->
+            <div class="bg-[#111827] p-8 rounded-xl border border-[#1E293B] shadow-2xl relative overflow-hidden">
+                <!-- Background decorative blob -->
+                <div class="absolute -top-24 -right-24 w-48 h-48 bg-purple-600/20 rounded-full blur-3xl pointer-events-none"></div>
+
+                <div x-show="activeProvider === 'Paytm Business'">
+                    <div class="bg-yellow-500/10 border-l-4 border-yellow-500 p-4 mb-6 rounded-r-lg">
+                        <p class="text-yellow-400 text-sm font-medium">Important: You must use a Paytm for Business UPI ID and MID. Standard personal Paytm UPI IDs will not trigger auto-verification.</p>
+                    </div>
+
+                    <div class="flex space-x-1 mb-6 border-b border-[#1E293B]">
+                        <button @click="paytmMode = 'A'" :class="paytmMode === 'A' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-gray-300'" class="pb-3 px-4 border-b-2 font-medium transition">Mode A: MID & QR Auto-Fetch</button>
+                        <button @click="paytmMode = 'B'" :class="paytmMode === 'B' ? 'border-purple-500 text-purple-400' : 'border-transparent text-gray-400 hover:text-gray-300'" class="pb-3 px-4 border-b-2 font-medium transition">Mode B: Cashier ID Login</button>
+                    </div>
+
+                    <!-- Mode A -->
+                    <div x-show="paytmMode === 'A'">
+                        <form method="POST" class="space-y-5" enctype="multipart/form-data">
+                            <input type="hidden" name="action" value="manual_verify_gateway">
+                            <input type="hidden" name="gateway_id" :value="getGatewayId('Paytm Business')">
+                            
+                            <div>
+                                <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Legal / Payee Name</label>
+                                <input type="text" name="payee_name" x-model="paytmForm.name" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition" placeholder="Name registered with Paytm" required>
+                            </div>
+
+                            <div>
+                                <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Your Paytm Business UPI ID (VPA)</label>
+                                <div class="flex gap-3">
+                                    <input type="text" name="upi_id" x-model="paytmForm.upi" class="flex-1 bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition font-mono" placeholder="yourbusiness@paytm" required>
+                                    
+                                    <label class="cursor-pointer bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-3.5 px-6 rounded-lg shadow-lg flex items-center transition">
+                                        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                        AUTO-FETCH VIA QR
+                                        <input type="file" accept="image/*" class="hidden" @change="scanQR($event)">
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div>
+                                <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Paytm Merchant ID (MID)</label>
+                                <input type="text" name="mid" x-model="paytmForm.mid" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition font-mono tracking-widest" placeholder="Enter your 21-character MID" required minlength="21" maxlength="21">
+                            </div>
+
+                            <button type="submit" class="w-full bg-white hover:bg-gray-100 text-gray-900 py-4 rounded-xl font-bold text-lg shadow-[0_0_20px_rgba(255,255,255,0.2)] transition mt-4">Save Payment Settings</button>
                         </form>
-                        <?php endif; ?>
+                    </div>
+
+                    <!-- Mode B -->
+                    <div x-show="paytmMode === 'B'" x-cloak>
+                        <form method="POST" class="space-y-5">
+                            <input type="hidden" name="action" value="manual_verify_gateway">
+                            <input type="hidden" name="gateway_id" :value="getGatewayId('Paytm Business')">
+                            <p class="text-gray-400 text-sm mb-4">Login with your Cashier credentials to automatically sync your MID and generate secure session tokens for auto-verification.</p>
+                            
+                            <div>
+                                <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Cashier Mobile / Email</label>
+                                <input type="text" name="cashier_id" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-purple-500 transition" placeholder="Enter Mobile or Email">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Password / PIN</label>
+                                <input type="password" name="api_token" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-purple-500 transition tracking-widest">
+                            </div>
+                            
+                            <button type="submit" class="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white py-4 rounded-xl font-bold text-lg shadow-lg transition mt-4">Login & Auto-Fetch Merchant</button>
+                        </form>
+                    </div>
+
+                    <!-- Paytm Steps Guide -->
+                    <div class="mt-12 pt-8 border-t border-[#1E293B]">
+                        <h4 class="text-lg font-bold text-white mb-6">How to find your Paytm for Business UPI ID and MID</h4>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 1</span><p class="text-sm text-gray-400">Install and Login to the Paytm for Business app.</p></div>
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 2</span><p class="text-sm text-gray-400">Click on the Menu Icon in the top left corner.</p></div>
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 3</span><p class="text-sm text-gray-400">Click on "Business Details" from the menu options.</p></div>
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 4</span><p class="text-sm text-gray-400">Click on "Manage Profile".</p></div>
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 5</span><p class="text-sm text-gray-400">Scroll down to find your 21-character Merchant ID (MID) and copy-paste it above.</p></div>
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 6</span><p class="text-sm text-gray-400">Go back to the main menu and click on "Manage QR".</p></div>
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 7</span><p class="text-sm text-gray-400">Download the QR Code to your phone, then click "AUTO-FETCH VIA QR" above.</p></div>
+                            <div class="bg-[#0B0F19] p-4 rounded-xl border border-[#1E293B]"><span class="bg-blue-900 text-blue-300 text-xs font-bold px-2 py-1 rounded mb-2 inline-block">Step 8</span><p class="text-sm text-gray-400">Check your monthly acceptance limits under "Payment Limit & Charges".</p></div>
+                        </div>
                     </div>
                 </div>
-                <?php endforeach; ?>
+
+                <!-- Generic Template for Other Providers (PhonePe, HDFC, BharatPe, Personal, etc) -->
+                <div x-show="activeProvider !== 'Paytm Business'" x-cloak>
+                    <div class="mb-6">
+                        <h3 class="text-2xl font-bold text-white mb-2" x-text="'Setup ' + activeProvider"></h3>
+                        <p class="text-gray-400 text-sm">Configure your credentials below to enable live auto-verification.</p>
+                    </div>
+
+                    <form method="POST" class="space-y-5" enctype="multipart/form-data">
+                        <input type="hidden" name="action" value="manual_verify_gateway">
+                        <input type="hidden" name="gateway_id" :value="getGatewayId(activeProvider)">
+                        
+                        <div>
+                            <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Your UPI ID (VPA)</label>
+                            <div class="flex gap-3">
+                                <input type="text" name="upi_id" class="flex-1 bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition font-mono" placeholder="yourbusiness@upi" required>
+                                
+                                <label class="cursor-pointer bg-[#1E293B] hover:bg-gray-700 text-white font-bold py-3.5 px-6 rounded-lg flex items-center transition border border-gray-600">
+                                    <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+                                    SCAN QR
+                                    <input type="file" accept="image/*" class="hidden">
+                                </label>
+                            </div>
+                        </div>
+
+                        <div x-show="activeProvider !== 'Personal UPI'">
+                            <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Merchant ID (MID) / Client ID</label>
+                            <input type="text" name="mid" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition font-mono">
+                        </div>
+
+                        <div x-show="activeProvider !== 'Personal UPI'">
+                            <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">API Token / Session Cookie (For Auto-Verify)</label>
+                            <textarea name="api_token" rows="2" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition font-mono text-xs"></textarea>
+                        </div>
+
+                        <button type="submit" class="w-full bg-white hover:bg-gray-100 text-gray-900 py-4 rounded-xl font-bold text-lg shadow-[0_0_20px_rgba(255,255,255,0.2)] transition mt-4">Save Payment Settings</button>
+                    </form>
+                </div>
+
             </div>
         </div>
 
@@ -384,9 +505,6 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
                             <div><span class="text-gray-500">Submitted UTR:</span> <br><b class="text-white text-base font-mono tracking-widest"><?= htmlspecialchars($tk['utr_number']) ?></b></div>
                             <div><span class="text-gray-500">Payer Mobile:</span> <br><span class="text-gray-300"><?= htmlspecialchars($tk['payer_mobile'] ?? 'N/A') ?></span></div>
                         </div>
-                        <div class="text-sm text-gray-400 italic bg-[#111827] p-3 rounded border border-[#1E293B]">
-                            "<?= htmlspecialchars($tk['message'] ?: 'No message provided') ?>"
-                        </div>
                         
                         <?php if($tk['status'] === 'OPEN'): ?>
                         <div class="mt-4 flex gap-3">
@@ -465,39 +583,81 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
 
     </main>
 
-    <!-- Connect Merchant Modal -->
-    <div x-show="modalOpen" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm p-4">
-        <div @click.away="modalOpen = false" class="bg-[#111827] rounded-2xl border border-[#1E293B] shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
-            <div class="p-6 border-b border-[#1E293B] flex justify-between items-center bg-gradient-to-r from-blue-900/20 to-transparent">
-                <h3 class="text-xl font-bold text-white">Manual Verify: <span x-text="currentGateway?.name" class="text-blue-400"></span></h3>
-                <button @click="modalOpen = false" class="text-gray-400 hover:text-white">&times;</button>
-            </div>
-            <div class="p-6 overflow-y-auto">
-                <form method="POST" class="space-y-4">
-                    <input type="hidden" name="action" value="manual_verify_gateway">
-                    <input type="hidden" name="gateway_id" :value="currentGateway?.id">
-                    
-                    <div>
-                        <label class="text-xs text-gray-500 uppercase block mb-1">Merchant ID (MID)</label>
-                        <input type="text" name="mid" :value="currentGateway?.mid" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3 text-white outline-none focus:border-blue-500">
-                    </div>
-                    <div>
-                        <label class="text-xs text-gray-500 uppercase block mb-1">UPI ID (VPA)</label>
-                        <input type="text" name="upi_id" :value="currentGateway?.upi_id" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3 text-white outline-none focus:border-blue-500">
-                    </div>
-                    <div>
-                        <label class="text-xs text-gray-500 uppercase block mb-1">API Token / Merchant Key</label>
-                        <input type="text" name="api_token" :value="currentGateway?.api_token" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3 text-white outline-none focus:border-blue-500">
-                    </div>
-                    <div>
-                        <label class="text-xs text-gray-500 uppercase block mb-1">Session Cookie / Auth Token (Auto-Verify)</label>
-                        <textarea name="session_cookie" rows="3" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3 text-white outline-none focus:border-blue-500 font-mono text-xs" :value="currentGateway?.session_cookie"></textarea>
-                    </div>
-                    <button type="submit" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-medium transition">Verify & Save Credentials</button>
-                </form>
-            </div>
-        </div>
-    </div>
+    <script>
+        // Inject PHP data into JS
+        const dbGateways = <?= json_encode($gateways_map) ?>;
 
+        function gatewayManager() {
+            return {
+                activeProvider: 'Paytm Business',
+                paytmMode: 'A',
+                paytmForm: { name: '', upi: '', mid: '' },
+                
+                providers: [
+                    { name: 'Paytm Business', badge: 'UPI Merchant Account', isActive: dbGateways['Paytm Business'].is_active == 1 },
+                    { name: 'PhonePe Business', badge: 'UPI Merchant Account', isActive: dbGateways['PhonePe Business'].is_active == 1 },
+                    { name: 'Google Pay Business', badge: 'UPI Merchant Account', isActive: dbGateways['Google Pay Business'].is_active == 1 },
+                    { name: 'HDFC Vyapar', badge: 'UPI Merchant Account', isActive: dbGateways['HDFC Vyapar'].is_active == 1 },
+                    { name: 'BharatPe', badge: 'UPI Merchant Account', isActive: dbGateways['BharatPe'].is_active == 1 },
+                    { name: 'Personal UPI', badge: 'Personal Account', isActive: dbGateways['Personal UPI'].is_active == 1 }
+                ],
+                
+                selectProvider(provider) {
+                    this.activeProvider = provider.name;
+                    // Pre-fill if exists
+                    const g = dbGateways[provider.name];
+                    if (g && provider.name === 'Paytm Business') {
+                        this.paytmForm.upi = g.upi_id || '';
+                        this.paytmForm.mid = g.mid || '';
+                        this.paytmForm.name = g.api_token || ''; // Stored in api_token for payee_name
+                    }
+                },
+                
+                getGatewayId(name) {
+                    return dbGateways[name]?.id;
+                },
+
+                scanQR(event) {
+                    const file = event.target.files[0];
+                    if (!file) return;
+
+                    const reader = new FileReader();
+                    reader.onload = e => {
+                        const img = new Image();
+                        img.onload = () => {
+                            const canvas = document.createElement('canvas');
+                            const context = canvas.getContext('2d');
+                            canvas.width = img.width;
+                            canvas.height = img.height;
+                            context.drawImage(img, 0, 0, img.width, img.height);
+                            
+                            // html5-qrcode integration
+                            const html5QrCode = new Html5Qrcode("reader"); // Hidden reader
+                            html5QrCode.scanFile(file, true)
+                            .then(qrCodeMessage => {
+                                // Extract upi://pay?pa=...&pn=...
+                                const url = new URL(qrCodeMessage);
+                                if (url.protocol === 'upi:') {
+                                    this.paytmForm.upi = url.searchParams.get('pa') || '';
+                                    this.paytmForm.name = url.searchParams.get('pn') || '';
+                                    alert("Success! Extracted UPI ID: " + this.paytmForm.upi);
+                                } else {
+                                    alert("Not a valid UPI QR code.");
+                                }
+                            })
+                            .catch(err => {
+                                alert(`Error scanning QR. Make sure the image is clear. (${err})`);
+                            });
+                        };
+                        img.src = e.target.result;
+                    };
+                    reader.readAsDataURL(file);
+                }
+            }
+        }
+        
+        // Add a hidden div for Html5Qrcode to use memory
+        document.write('<div id="reader" style="display:none;"></div>');
+    </script>
 </body>
 </html>

@@ -25,6 +25,8 @@ echo "[2/8] Installing Nginx, PHP, and MySQL..."
 sudo apt-get install -y nginx mysql-server
 
 # Use default PHP packages provided by the OS to avoid PPA issues on certain OCI images
+# Remove the ondrej PPA if it was previously added (which causes apt-get update to fail on unsupported OS)
+sudo rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php-*.list
 sudo apt-get update
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y php-fpm php-cli php-mysql php-curl php-gd php-mbstring php-xml php-zip php-bcmath
 

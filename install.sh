@@ -43,8 +43,8 @@ sudo systemctl start nginx mysql
 
 # 3. Configure Firewall (Port Forwarding for OCI)
 echo "[3/8] Configuring Oracle Cloud Firewall (Ports 80 & 443)..."
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
-sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+sudo iptables -I INPUT -m state --state NEW -p tcp --dport 80 -j ACCEPT
+sudo iptables -I INPUT -m state --state NEW -p tcp --dport 443 -j ACCEPT
 sudo netfilter-persistent save
 
 # 4. Clone Repository

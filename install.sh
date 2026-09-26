@@ -21,7 +21,7 @@ echo "[1/8] Updating system and installing prerequisites..."
 sudo rm -f /etc/apt/sources.list.d/ondrej-ubuntu-php-*.list
 sudo apt-get update || true
 sudo apt-get upgrade -y
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common curl wget git unzip iptables-persistent
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common curl wget git unzip iptables-persistent cron
 
 # 2. Install LEMP Stack
 echo "[2/8] Installing Nginx, PHP, and MySQL..."

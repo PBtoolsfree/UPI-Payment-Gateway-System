@@ -28,11 +28,7 @@ $settings = $stmt->fetch();
 session_start();
 function requireAdmin() {
     global $settings;
-    if (isset($_GET['logout'])) {
-        session_destroy();
-        header("Location: /");
-        exit;
-    }
+
     
     if (isset($_POST['admin_pin'])) {
         if ($_POST['admin_pin'] === $settings['admin_pin']) {

@@ -21,16 +21,23 @@ sudo apt-get update && sudo apt-get upgrade -y
 sudo DEBIAN_FRONTEND=noninteractive apt-get install -y software-properties-common curl wget git unzip iptables-persistent
 
 # 2. Install LEMP Stack
-echo "[2/8] Installing Nginx, PHP 8.2, and MySQL..."
+echo "[2/8] Installing Nginx, PHP, and MySQL..."
 sudo apt-get install -y nginx mysql-server
-sudo add-apt-repository ppa:ondrej/php -y
+
+# Use default PHP packages provided by the OS to avoid PPA issues on certain OCI images
 sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y php8.2-fpm php8.2-cli php8.2-mysql php8.2-curl php8.2-gd php8.2-mbstring php8.2-xml php8.2-zip php8.2-bcmath
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y php-fpm php-cli php-mysql php-curl php-gd php-mbstring php-xml php-zip php-bcmath
 
 sudo systemctl enable nginx
-sudo systemctl enable php8.2-fpm
 sudo systemctl enable mysql
-sudo systemctl start nginx php8.2-fpm mysql
+
+# Find PHP-FPM service name and enable/start it
+PHP_SERVICE=$(systemctl list-unit-files | grep -iE '^php.*-fpm\.service' | awk '{print $1}' | head -n 1)
+if [ -n "$PHP_SERVICE" ]; then
+    sudo systemctl enable "$PHP_SERVICE"
+    sudo systemctl start "$PHP_SERVICE"
+fi
+sudo systemctl start nginx mysql
 
 # 3. Configure Firewall (Port Forwarding for OCI)
 echo "[3/8] Configuring Oracle Cloud Firewall (Ports 80 & 443)..."
@@ -70,7 +77,17 @@ fi
 
 # 7. Configure Nginx Server Block
 echo "[7/8] Configuring Nginx..."
-cat << 'EOF' | sudo tee /etc/nginx/sites-available/upi_gateway
+
+# Dynamically find the PHP-FPM socket path
+PHP_SOCK=$(find /var/run/php/ -name "php*-fpm.sock" | head -n 1)
+if [ -z "$PHP_SOCK" ]; then
+    # Fallback if not found
+    PHP_SOCK="unix:/var/run/php/php-fpm.sock"
+else
+    PHP_SOCK="unix:$PHP_SOCK"
+fi
+
+cat << EOF | sudo tee /etc/nginx/sites-available/upi_gateway
 server {
     listen 80;
     server_name _;
@@ -78,12 +95,12 @@ server {
     index index.php index.html;
 
     location / {
-        try_files $uri $uri/ /index.php?$query_string;
+        try_files \$uri \$uri/ /index.php?\$query_string;
     }
 
-    location ~ \.php$ {
+    location ~ \.php\$ {
         include snippets/fastcgi-php.conf;
-        fastcgi_pass unix:/var/run/php/php8.2-fpm.sock;
+        fastcgi_pass $PHP_SOCK;
     }
 
     location ~ /\.ht {

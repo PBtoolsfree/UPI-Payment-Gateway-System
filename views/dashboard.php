@@ -300,7 +300,7 @@ $webhooks = $pdo->query("SELECT * FROM webhooks")->fetchAll();
 
                             <div>
                                 <label class="text-xs text-gray-400 uppercase font-semibold mb-1 block">Paytm Merchant ID (MID)</label>
-                                <input type="text" name="mid" x-model="paytmForm.mid" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition font-mono tracking-widest" placeholder="Enter your 21-character MID" required minlength="21" maxlength="21">
+                                <input type="text" name="mid" x-model="paytmForm.mid" class="w-full bg-[#0B0F19] border border-[#1E293B] rounded-lg p-3.5 text-white outline-none focus:border-blue-500 transition font-mono tracking-widest" placeholder="Enter your 20 or 21-character MID" required minlength="20" maxlength="21">
                             </div>
 
                             <button type="submit" class="w-full bg-white hover:bg-gray-100 text-gray-900 py-4 rounded-xl font-bold text-lg shadow-[0_0_20px_rgba(255,255,255,0.2)] transition mt-4">Save Payment Settings</button>

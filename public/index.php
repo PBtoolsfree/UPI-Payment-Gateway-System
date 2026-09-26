@@ -1,37 +1,25 @@
 <?php
-// public/index.php - Front controller for routing
-
+// public/index.php - Front controller
 require_once __DIR__ . '/../config.php';
 
 $request_uri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
-// Simple routing
 switch ($request_uri) {
     case '/':
     case '/index.php':
-        require __DIR__ . '/../views/landing.php';
+        require __DIR__ . '/../views/dashboard.php';
         break;
         
-    case '/checkout':
-        require __DIR__ . '/../views/checkout.php';
+    case '/pay':
+        require __DIR__ . '/../views/pay.php';
         break;
         
-    case '/api/v1/create-order':
-        require __DIR__ . '/../api/v1/create-order.php';
+    case '/api/create-order':
+        require __DIR__ . '/../api/create-order.php';
         break;
         
-    case '/api/v1/check-status':
-        require __DIR__ . '/../api/v1/check-status.php';
-        break;
-        
-    case '/dashboard':
-        // Placeholder for merchant dashboard
-        echo "Merchant Dashboard - Coming Soon";
-        break;
-        
-    case '/admin':
-        // Placeholder for admin panel
-        echo "Admin Panel - Coming Soon";
+    case '/api/status':
+        require __DIR__ . '/../api/status.php';
         break;
 
     default:
